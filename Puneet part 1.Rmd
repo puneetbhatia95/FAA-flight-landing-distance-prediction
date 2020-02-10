@@ -1,0 +1,491 @@
+---
+title: "Building a muliple linear regression model for predicting flight landing distance"
+author: "Puneet Bhatia"
+date: "1/21/2020"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  word_document: default
+---
+
+
+
+```{r results='hide',message=FALSE,warning=FALSE}
+#Loading required libraries
+
+library(readxl)
+library(tidyverse)
+library(plyr)
+library(dplyr)
+library(MASS)
+
+```
+
+__Initial exploration of the data__
+
+```{r}
+
+
+# Importing data
+
+FAA1 <- read_excel("FAA1-1.xls") 
+FAA2 <- read_excel("FAA2-1.xls") 
+
+# Structure of datasets
+
+str(FAA1)
+
+dim(unique(FAA1))
+
+```
+
+FAA1 has 800 rows and 8 columns
+
+```{r}
+str(FAA2)
+dim(unique(FAA2))
+```
+
+FAA2 has 150 rows and 7 columns. 'duration' column is not present in FAA2, but it is present in FAA1.
+
+```{r}
+# Appending the data
+
+combined <- rbind.fill(FAA1,FAA2)
+
+# Checking duplicates
+
+dim(combined[,-2])
+
+dim(unique(combined[,-2]))
+
+```
+
+We have 100 duplicate records.
+
+```{r}
+# Removing duplicate records
+
+unique_combined <- unique(combined[,-2]) %>% left_join(FAA1)
+
+# Structure of the new data set
+
+str(unique_combined)
+
+```
+
+Dataset has 850 rows and 8 variables
+
+```{r}
+
+#unique_combined$aircraft <- as.factor(unique_combined$aircraft)
+# Summary of the combined data
+
+summary(unique_combined)
+
+boxplot(unique_combined$duration~unique_combined$aircraft)
+boxplot(unique_combined$speed_ground~unique_combined$aircraft)
+boxplot(unique_combined$speed_air~unique_combined$aircraft)
+boxplot(unique_combined$height~unique_combined$aircraft)
+boxplot(unique_combined$pitch~unique_combined$aircraft)
+boxplot(unique_combined$distance~unique_combined$aircraft)
+boxplot(unique_combined$no_pasg~unique_combined$aircraft)
+
+hist(unique_combined$distance)
+```
+
+__Summary of findings__
+
+* There are 642 (~75.5%) missing values for spped_air and 50 (~5.88%) missing values for duration. Other columns do not have missing values 
+* Distance has a right skewed distribution. Median is much smaller than the mean and this can also be seen from the histogram
+* Boeing has relatively higher distribution of distance and pitch than airbus
+* Boeing has more speed_air variation. Mean and median are very close for both aircrafts
+* Duration, No_pasg, Speed_ground and Height have similar distribution for both the aircrafts
+
+__Data Cleaning and further exploration__
+
+```{r}
+# Checking abnormal values
+
+unique_combined %>% filter(duration<40)  #5 observations with duration less than 40
+unique_combined %>% filter(!(speed_ground >= 30 & speed_ground <= 140)) # 3 observations with abnormal speed_ground
+unique_combined %>% filter(!(speed_air >= 30 & speed_air <= 140| is.na(speed_air))) # 1 observation with abnormal speed_air
+unique_combined %>% filter(height<6)  #10 observations with abnormal height
+unique_combined %>% filter(distance>6000)  #2 observations with abnormal distance
+```
+
+```{r}
+#Cleaning data based on requirements
+
+FAA_final <- unique_combined %>% filter(duration>40 | is.na(duration),speed_ground >= 30 & speed_ground <= 140, speed_air >= 30 & speed_air <= 140 | is.na(speed_air), height >= 6, distance < 6000)
+
+dim(FAA_final)
+```
+
+The dataset has 831 rows after removing the abnormal values. 19 rows have been removed.
+
+```{r}
+# Structure of cleaned data
+
+str(FAA_final)
+
+summary(FAA_final)
+
+# Histogram of the variables to visualize the distribution
+
+hist(FAA_final$no_pasg)
+hist(FAA_final$speed_ground)
+hist(FAA_final$speed_air)
+hist(FAA_final$height)
+hist(FAA_final$pitch)
+hist(FAA_final$distance)
+hist(FAA_final$duration)
+
+# Boxplots of the numerical variables
+
+boxplot(FAA_final$duration~FAA_final$aircraft)
+boxplot(FAA_final$speed_ground~FAA_final$aircraft)
+boxplot(FAA_final$speed_air~FAA_final$aircraft)
+boxplot(FAA_final$height~FAA_final$aircraft)
+boxplot(FAA_final$pitch~FAA_final$aircraft)
+boxplot(FAA_final$distance~FAA_final$aircraft)
+boxplot(FAA_final$no_pasg~FAA_final$aircraft)
+
+
+```
+
+__Summary of findings__
+
+* There are 628 (~75.5%) missing values for speed_air and 50 (~6.01%) missing values for duration. Other columns do not have missing values 
+* no_pasg, speed_ground, hight and pitch have symetric distribution
+* speed_air, distance and duration have right skewed distribution
+* Boeing has relatively higher distribution of distance and pitch than airbus
+* Boeing has more speed_air variation. Mean and median are very close for both aircrafts
+* Duration, No_pasg, Speed_ground and Height have similar distribution for both the aircrafts
+
+__Initial analysis for identifying important factors that impact the response variable “landing distance”__
+
+```{r}
+
+# Compute the pairwise correlation between the landing distance and each factor X and storing it in Table1
+cor1 <- cor(FAA_final$distance, FAA_final[,c(2,3,5,6)])
+
+cor2 <- cor(subset(FAA_final,!is.na(FAA_final$speed_air))$distance,subset(FAA_final,!is.na(FAA_final$speed_air))$speed_air)
+
+
+cor3 <- cor(subset(FAA_final,!is.na(FAA_final$duration))$distance,subset(FAA_final,!is.na(FAA_final$duration))$duration)
+
+cor <- c(cor1,cor2,cor3)
+
+direction <- c('negative','positive','positive','positive','positive','negative')
+
+size_of_cor <- abs(cor)
+
+names_variables <- colnames(FAA_final)[c(2,3,5,6,4,8)]
+
+Table1 <- data.frame(names_variables,size_of_cor,direction)
+
+Table1 <- Table1[
+  order( Table1[,2],decreasing = TRUE ),
+]
+
+Table1
+
+# Creating XY plots
+
+plot(FAA_final$distance,FAA_final$duration)
+plot(FAA_final$distance,FAA_final$no_pasg)
+plot(FAA_final$distance,FAA_final$speed_ground)
+plot(FAA_final$distance,FAA_final$speed_air)
+plot(FAA_final$distance,FAA_final$height)
+plot(FAA_final$distance,FAA_final$pitch)
+
+
+
+
+```
+
+On the basis of plots we observe some relationship between-
+
+* Distance and Speed_ground
+* Distance and Speed_air
+
+The relationship is consistent with computed high correlations for these variables. Other variables do not show any linear relationship which is consistent with their low size of correlations.
+
+```{r}
+# Encoding aircraft (airbus is coded as 1 and boeing as 0)
+for(i in 1:831)
+{
+if(FAA_final$aircraft[i] == 'airbus') 
+{
+  FAA_final$aircraft[i] = 1
+}
+
+if(FAA_final$aircraft[i] == 'boeing') 
+{
+  FAA_final$aircraft[i] = 0
+}
+
+}
+
+FAA_final$aircraft <- as.numeric(FAA_final$aircraft)
+cor_aircraft <- cor(FAA_final$aircraft,FAA_final$distance)
+
+plot(FAA_final$aircraft,FAA_final$distance)
+
+
+
+
+
+```
+
+We can conclude from negative correlation and the plot that boeing has relatively higher distribution of distance than airbus.
+
+__Regression using a single factor each time__
+
+```{r}
+lm_1 <- lm(distance ~ aircraft, FAA_final)
+summary(lm_1)
+d_1 <- 'negative'
+p_1 <- summary(lm_1)$coefficients[,4][2]
+
+lm_2 <- lm(distance ~ no_pasg, FAA_final)
+summary(lm_2)
+d_2 <- 'negative'
+p_2 <- summary(lm_2)$coefficients[,4][2]
+
+lm_3 <- lm(distance ~ speed_ground, FAA_final)
+summary(lm_3)
+d_3 <- 'positive'
+p_3 <- summary(lm_3)$coefficients[,4][2]
+
+lm_4 <- lm(distance ~ speed_air, FAA_final)
+summary(lm_4)
+d_4 <- 'positive'
+p_4 <- summary(lm_4)$coefficients[,4][2]
+
+lm_5 <- lm(distance ~ height, FAA_final)
+summary(lm_5)
+d_5 <- 'positive'
+p_5 <- summary(lm_5)$coefficients[,4][2]
+
+lm_6 <- lm(distance ~ pitch, FAA_final)
+summary(lm_6)
+d_6 <- 'positive'
+p_6 <- summary(lm_6)$coefficients[,4][2]
+
+lm_7 <- lm(distance ~ duration, FAA_final)
+summary(lm_7)
+d_7 <- 'negative'
+p_7 <- summary(lm_7)$coefficients[,4][2]
+
+p_value <- c(p_1,p_2,p_3,p_4,p_5,p_6,p_7)
+dir <- c(d_1,d_2,d_3,d_4,d_5,d_6,d_7)
+names <- colnames(FAA_final[c(1:6,8)])
+
+Table2 <- data.frame(names,p_value,dir)
+Table2 <- Table2[
+  order( Table2[,2] ),
+]
+Table2
+
+# Standardizing each X variable
+
+m1 <- mean(FAA_final$aircraft)
+s1 <- sd(FAA_final$aircraft)
+
+m2 <- mean(FAA_final$no_pasg)
+s2 <- sd(FAA_final$no_pasg)
+
+m3 <- mean(FAA_final$speed_ground)
+s3 <- sd(FAA_final$speed_ground)
+
+m4 <- mean(FAA_final$speed_air, na.rm = TRUE)
+s4 <- sd(FAA_final$speed_air, na.rm = TRUE)
+
+m5 <- mean(FAA_final$height)
+s5 <- sd(FAA_final$height)
+
+m6 <- mean(FAA_final$pitch)
+s6 <- sd(FAA_final$pitch)
+
+m7 <- mean(FAA_final$duration, na.rm = TRUE)
+s7 <- sd(FAA_final$duration, na.rm = TRUE)
+
+FAA_final <- FAA_final %>% mutate(aircraft_s = (aircraft - m1)/s1)
+FAA_final <- FAA_final %>% mutate(no_pasg_s = (no_pasg - m2)/s2)
+FAA_final <- FAA_final %>% mutate(speed_ground_s = (speed_ground - m3)/s3)
+FAA_final <- FAA_final %>% mutate(speed_air_s = (speed_air - m4)/s4)
+FAA_final <- FAA_final %>% mutate(height_s = (height - m5)/s5)
+FAA_final <- FAA_final %>% mutate(pitch_s = (pitch - m6)/s6)
+FAA_final <- FAA_final %>% mutate(duration_s = (duration - m7)/s7)
+
+
+lmm_1 <- lm(distance ~ aircraft_s, FAA_final)
+summary(lmm_1)
+dd_1 <- 'negative'
+p_1 <- summary(lmm_1)$coefficients[,1][2]
+
+
+lmm_2 <- lm(distance ~ no_pasg, FAA_final)
+summary(lmm_2)
+dd_2 <- 'negative'
+p_2 <- summary(lmm_2)$coefficients[,1][2]
+
+lmm_3 <- lm(distance ~ speed_ground, FAA_final)
+summary(lmm_3)
+dd_3 <- 'positive'
+p_3 <- summary(lmm_3)$coefficients[,1][2]
+
+lmm_4 <- lm(distance ~ speed_air, FAA_final)
+summary(lmm_4)
+dd_4 <- 'positive'
+p_4 <- summary(lmm_4)$coefficients[,1][2]
+
+lmm_5 <- lm(distance ~ height, FAA_final)
+summary(lmm_5)
+dd_5 <- 'positive'
+p_5 <- summary(lmm_5)$coefficients[,1][2]
+
+lmm_6 <- lm(distance ~ pitch, FAA_final)
+summary(lmm_6)
+dd_6 <- 'positive'
+p_6 <- summary(lmm_6)$coefficients[,1][2]
+
+lmm_7 <- lm(distance ~ duration, FAA_final)
+summary(lmm_7)
+dd_7 <- 'negative'
+p_7 <- summary(lmm_7)$coefficients[,1][2]
+
+size_coff <- c(p_1,p_2,p_3,p_4,p_5,p_6,p_7)
+dir <- c(dd_1,dd_2,dd_3,dd_4,dd_5,dd_6,dd_7)
+names <- colnames(FAA_final[c(9:15)])
+
+Table3 <- data.frame(names,abs(size_coff),dir)
+Table3 <- Table3[
+  order( Table3[,2],decreasing = TRUE ),
+]
+Table3
+
+
+```
+
+__Relative order of importance on the basis of Table1,2 and 3__
+
+Table1 and Table2 are consistent. However we observe some differences in the order in Table3.
+
+```{r}
+# Creating Table0 (Ranking based on all the factors)
+
+names <- c('speed_ground','speed_air','aircraft','pitch','height','no_pasg','duration')
+importance <- c(1:7)
+Table0 <- data.frame(names,importance)
+```
+
+__Check collinearity__
+
+```{r}
+l1 <- lm(distance~speed_ground, FAA_final)
+summary(l1)
+
+l2 <- lm(distance~speed_air, FAA_final)
+summary(l2)
+
+l3 <- lm(distance~speed_ground + speed_air, FAA_final)
+summary(l3)
+
+```
+ We observe sign change in speed_ground when we fit it along with speed_air in comparison when it is fitted alone.
+ 
+```{r}
+# Cor between speed_air and speed_ground
+
+cor(subset(FAA_final,!is.na(FAA_final$speed_air))$speed_air,subset(FAA_final,!is.na(FAA_final$speed_air))$speed_ground)
+```
+ 
+ The correlation is very high. I would only keep speed_ground in the model as it does not have NAs. On the other hand speed_air has a lot of NAs.
+ 
+ __Variable selection based on our ranking in Table 0__
+ 
+```{r}
+L1 <- lm(distance~speed_ground, FAA_final)
+summary(L1)
+r1 <- summary(L1)$r.squared
+
+L2 <- lm(distance~speed_ground+aircraft, FAA_final)
+summary(L2)
+r2 <- summary(L2)$r.squared
+
+L3 <- lm(distance~speed_ground+aircraft+pitch, FAA_final)
+summary(L3)
+r3 <- summary(L3)$r.squared
+
+L4 <- lm(distance~speed_ground+aircraft+pitch+height, FAA_final)
+summary(L4)
+r4 <- summary(L4)$r.squared
+
+L5 <- lm(distance~speed_ground+aircraft+pitch+height+no_pasg, FAA_final)
+summary(L5)
+r5 <- summary(L5)$r.squared
+
+L6 <- lm(distance~speed_ground+aircraft+pitch+height+no_pasg+duration, FAA_final)
+summary(L6)
+r6 <- summary(L6)$r.squared
+
+num <- c(1:6)
+
+plot(c(r1,r2,r3,r4,r5,r6),num)
+
+```
+ 
+R squared increases as the number of variables increase
+
+```{r}
+adj.r1 <- summary(L1)$adj.r.squared
+adj.r2 <- summary(L2)$adj.r.squared
+adj.r3 <- summary(L3)$adj.r.squared
+adj.r4 <- summary(L4)$adj.r.squared
+adj.r5 <- summary(L5)$adj.r.squared
+adj.r6 <- summary(L6)$adj.r.squared
+
+c(adj.r1,adj.r2,adj.r3,adj.r4,adj.r5,adj.r6)
+plot(c(adj.r1,adj.r2,adj.r3,adj.r4,adj.r5,adj.r6),num)
+
+```
+
+Adj R Squared also increases but the increase is less per addition of new variable
+
+```{r}
+# AIC
+
+AIC1 <- AIC(L1)
+AIC2 <- AIC(L2)
+AIC3 <- AIC(L3)
+AIC4 <- AIC(L4)
+AIC5 <- AIC(L5)
+AIC6 <- AIC(L6)
+
+c(AIC1,AIC2,AIC3,AIC4,AIC5,AIC6)
+
+plot(c(AIC1,AIC2,AIC3,AIC4,AIC5,AIC6),num)
+
+```
+
+On the basis of Adj R Squared and AIC I would select model L4. That is the model with 4 predictors - (speed_ground,aircraft,pitch and height)
+
+__Variable selection based on automate algorithm__
+
+```{r}
+Model1_LM <- lm(distance ~ 1, data = FAA_final[,c(1:3,5:7)])
+fit1_LM <- stepAIC(Model1_LM, direction = 'forward')
+
+fit1 <- lm(distance ~ ., FAA_final[,c(1:3,5:7)])
+fit2 <- lm(distance ~ 1, FAA_final[,c(1:3,5:7)])
+stepAIC(fit1,direction="backward")
+stepAIC(fit2,direction="forward",scope=list(upper=fit1,lower=fit2))
+stepAIC(fit2,direction="both",scope=list(upper=fit1,lower=fit2))
+
+```
+
+On the basis of stepAIC forward variable selection I would select model with 2 predictors - (speed_ground and aircraft)
